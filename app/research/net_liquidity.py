@@ -12,7 +12,7 @@ from app.config import Settings
 from app.release_calendar import attach_h41_alignment
 from app.research.demo import synthetic_macro_and_prices
 from app.research.features import build_net_liquidity, price_to_weekly, attach_forward_returns_to_features
-from app.research.stats import cross_corr_table, quintile_spread, arx_regression, expanding_directional_oos, summary_from_oos
+from app.research.stats import cross_corr_table, quintile_spread, arx_regression, expanding_directional_oos, summary_from_oos, validation_label
 from app.research.reporting import write_csv, write_markdown_report
 from app.utils import run_id, utc_now_iso, write_json, zip_dir
 
@@ -67,6 +67,8 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
     analysis = attach_forward_returns_to_features(features_aligned, weekly_price, horizons)
     target_cols = [f'fwd_logret_{h}w' for h in horizons]
     matched_target_rows = int(analysis['target_anchor_utc'].notna().sum()) if 'target_anchor_utc' in analysis.columns else int(analysis[target_cols].notna().any(axis=1).sum())
+    analysis_window_rows = int(len(features_aligned))
+    target_coverage_ratio = float(matched_target_rows / analysis_window_rows) if analysis_window_rows else None
     first_matched_target_anchor = None
     if 'target_anchor_utc' in analysis.columns and matched_target_rows:
         first_matched_target_anchor = str(analysis['target_anchor_utc'].dropna().min())
@@ -83,7 +85,9 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
     best_r = min([x for x in rrows if x.get('p') is not None], key=lambda x: x['p'], default={})
     metrics = {
         'rows': int(len(analysis.dropna(subset=['liq_impulse_z_52']))),
+        'analysis_window_rows': analysis_window_rows,
         'matched_target_rows': matched_target_rows,
+        'target_coverage_ratio': target_coverage_ratio,
         'first_matched_target_anchor_utc': first_matched_target_anchor,
         'best_quintile_target': best_q.get('target'),
         'best_quintile_spread': best_q.get('spread'),
@@ -93,6 +97,7 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
         'best_regression_p': best_r.get('p'),
         'oos': summary_from_oos(oos),
     }
+    metrics['validation'] = validation_label(metrics, coverage_ratio=target_coverage_ratio)
     return metrics, analysis, corr
 
 

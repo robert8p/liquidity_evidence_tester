@@ -33,6 +33,8 @@ def quintile_spread(df: pd.DataFrame, feature_col: str, target_col: str) -> dict
         'bottom_mean': float(bottom.mean()),
         'spread': float(top.mean() - bottom.mean()),
         'hit_rate_top': float((top > 0).mean()),
+        'top_count': int(top.count()),
+        'bottom_count': int(bottom.count()),
     }
 
 
@@ -135,12 +137,80 @@ def expanding_directional_oos(df: pd.DataFrame, feature_col: str, target_col: st
 
 
 def summary_from_oos(oos: pd.DataFrame) -> dict:
+    """Summarise OOS predictions against simple baselines.
+
+    Earlier versions reported directional accuracy and signal return alone. That can be
+    misleading for upward-drifting assets if the fitted model is mostly or always long.
+    This summary explicitly compares the model to always-long/always-short baselines and
+    records long-bias so the report can reject confidence-machine results.
+    """
     if oos.empty:
-        return {'n': 0, 'directional_accuracy': None, 'mean_signal_return': None}
-    pnl = oos['signal'] * oos['actual']
+        return {
+            'n': 0,
+            'directional_accuracy': None,
+            'mean_signal_return': None,
+            'hit_rate_signal_return_positive': None,
+            'always_long_mean_return': None,
+            'always_long_hit_rate': None,
+            'always_short_mean_return': None,
+            'always_short_hit_rate': None,
+            'excess_mean_return_vs_always_long': None,
+            'directional_accuracy_lift_vs_always_long': None,
+            'signal_long_fraction': None,
+            'signal_short_fraction': None,
+            'baseline_note': 'No OOS rows available.',
+        }
+    actual = oos['actual'].astype(float)
+    signal = oos['signal'].astype(float)
+    pnl = signal * actual
+    always_long_pnl = actual
+    always_short_pnl = -actual
+    always_long_hit = actual > 0
+    always_short_hit = actual < 0
+    signal_long_fraction = float((signal > 0).mean())
+    signal_short_fraction = float((signal < 0).mean())
+    signal_accuracy = float(oos['correct'].mean())
+    always_long_accuracy = float(always_long_hit.mean())
+    long_bias_warning = signal_long_fraction >= 0.85 or signal_short_fraction >= 0.85
+    baseline_note = 'Signal is materially one-sided; compare against baseline before interpreting accuracy.' if long_bias_warning else 'Signal uses both long and short directions.'
     return {
         'n': int(len(oos)),
-        'directional_accuracy': float(oos['correct'].mean()),
+        'directional_accuracy': signal_accuracy,
         'mean_signal_return': float(pnl.mean()),
         'hit_rate_signal_return_positive': float((pnl > 0).mean()),
+        'always_long_mean_return': float(always_long_pnl.mean()),
+        'always_long_hit_rate': always_long_accuracy,
+        'always_short_mean_return': float(always_short_pnl.mean()),
+        'always_short_hit_rate': float(always_short_hit.mean()),
+        'excess_mean_return_vs_always_long': float(pnl.mean() - always_long_pnl.mean()),
+        'directional_accuracy_lift_vs_always_long': float(signal_accuracy - always_long_accuracy),
+        'signal_long_fraction': signal_long_fraction,
+        'signal_short_fraction': signal_short_fraction,
+        'baseline_note': baseline_note,
     }
+
+
+def validation_label(metrics: dict, *, coverage_ratio: float | None = None) -> dict:
+    """Classify whether a target has passed a blunt evidence gate.
+
+    This is intentionally conservative. It is not a trading recommendation; it stops a
+    weak report from sounding better than it is.
+    """
+    reasons: list[str] = []
+    best_p = metrics.get('best_regression_p')
+    oos = metrics.get('oos') or {}
+    best_spread = metrics.get('best_quintile_spread')
+    if coverage_ratio is not None and coverage_ratio < 0.8:
+        reasons.append(f'Coverage is limited: {coverage_ratio:.1%} of analysis rows matched target history.')
+    if best_p is None or best_p > 0.10:
+        reasons.append('Predictive regression is not statistically persuasive at p<=0.10.')
+    if oos.get('directional_accuracy_lift_vs_always_long') is None or oos.get('directional_accuracy_lift_vs_always_long') <= 0.02:
+        reasons.append('OOS directional accuracy does not beat always-long by at least 2 percentage points.')
+    if oos.get('excess_mean_return_vs_always_long') is None or oos.get('excess_mean_return_vs_always_long') <= 0:
+        reasons.append('OOS mean signal return does not beat always-long baseline.')
+    if oos.get('signal_long_fraction') is not None and (oos.get('signal_long_fraction') >= 0.85 or oos.get('signal_short_fraction') >= 0.85):
+        reasons.append('OOS signal is materially one-sided; raw accuracy may just reflect asset drift.')
+    if best_spread is None or abs(float(best_spread)) < 0.01:
+        reasons.append('Best quintile spread is economically small or unavailable.')
+    status = 'validated_candidate' if not reasons else 'not_validated'
+    return {'status': status, 'reasons': reasons}
