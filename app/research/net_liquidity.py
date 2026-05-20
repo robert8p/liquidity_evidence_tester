@@ -36,6 +36,32 @@ def _fetch_btc(settings: Settings, start_date: str, end_date: str, raw_dir: Path
     return fetch_ohlcv(settings.coinapi_btc_symbol_id, settings.coinapi_key, start_iso=f'{start_date}T00:00:00Z', end_iso=f'{end_date}T23:59:59Z', raw_dir=raw_dir)
 
 
+
+
+def _analysis_window_bounds(start_date: str, end_date: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start_ts = pd.Timestamp(f'{start_date}T00:00:00Z')
+    end_ts = pd.Timestamp(f'{end_date}T23:59:59Z')
+    return start_ts, end_ts
+
+
+def _restrict_aligned_to_analysis_window(features_aligned: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFrame:
+    """Keep only rows whose tradable effective timestamp is inside the requested run window.
+
+    v0.1.2 computed features using the full available FRED history, then analysed every
+    pre-start macro row. When target prices began at the requested start date, merge_asof
+    attached the first available target return to many old macro observations. That created
+    repeated artificial forward returns and invalid OOS/quintile metrics. This helper keeps
+    the useful pre-start macro history only for rolling feature context, while restricting
+    analysed observations to the operator-requested tradable window.
+    """
+    if 'effective_trade_at_utc' not in features_aligned.columns:
+        raise ValueError('features_aligned must include effective_trade_at_utc before window restriction')
+    start_ts, end_ts = _analysis_window_bounds(start_date, end_date)
+    out = features_aligned.copy()
+    out['effective_trade_at_utc'] = pd.to_datetime(out['effective_trade_at_utc'], utc=True)
+    return out[(out['effective_trade_at_utc'] >= start_ts) & (out['effective_trade_at_utc'] <= end_ts)].copy()
+
+
 def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, target_name: str, horizons: list[int], run_dir: Path) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     weekly_price = price_to_weekly(price_df)
     analysis = attach_forward_returns_to_features(features_aligned, weekly_price, horizons)
@@ -83,13 +109,14 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
         btc = _fetch_btc(settings, start_date, end_date, raw_dir, warnings) if include_btc else None
         equity = _fetch_equity(settings, target_symbol, start_date, end_date, raw_dir, warnings) if include_equity else None
 
-    feature_base = build_net_liquidity(
+    feature_base_all = build_net_liquidity(
         fed, tga, onrrp,
         fed_assets_scale=settings.fred_fed_assets_scale_to_billions,
         tga_scale=settings.fred_tga_scale_to_billions,
         onrrp_scale=settings.fred_onrrp_scale_to_billions,
     )
-    write_csv(run_dir / 'net_liquidity_features_unaligned.csv', feature_base)
+    # Keep the full context file for auditability and rolling z-score reconstruction.
+    write_csv(run_dir / 'net_liquidity_features_full_context_unaligned.csv', feature_base_all)
 
     metrics = {
         'run_id': rid,
@@ -98,20 +125,39 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
         'demo_mode': demo_mode,
         'start_date': start_date,
         'end_date': end_date,
-        'feature_rows': int(len(feature_base)),
+        'feature_rows_full_context': int(len(feature_base_all)),
         'targets': {},
         'warnings': warnings,
     }
 
+    if not feature_base_all.empty and feature_base_all.index.min() < pd.Timestamp(f'{start_date}T00:00:00Z'):
+        warnings.append('Pre-start macro history was used only for rolling feature context; analysed rows were restricted to the requested release-aligned window.')
+
     if include_btc and btc is not None and not btc.empty:
-        aligned_crypto = attach_h41_alignment(feature_base, instrument_type='crypto').set_index('effective_trade_at_utc')
-        m, _, _ = _target_analysis(aligned_crypto, btc, 'BTCUSD', horizons_weeks, run_dir)
-        metrics['targets']['BTCUSD'] = m
+        aligned_crypto_all = attach_h41_alignment(feature_base_all, instrument_type='crypto')
+        aligned_crypto_window = _restrict_aligned_to_analysis_window(aligned_crypto_all, start_date, end_date).set_index('effective_trade_at_utc')
+        write_csv(run_dir / 'BTCUSD_net_liquidity_features_analysis_window.csv', aligned_crypto_window)
+        if not aligned_crypto_window.empty:
+            m, _, _ = _target_analysis(aligned_crypto_window, btc, 'BTCUSD', horizons_weeks, run_dir)
+            m['analysis_window_rows'] = int(len(aligned_crypto_window))
+            m['target_price_start_utc'] = str(btc.index.min())
+            m['target_price_end_utc'] = str(btc.index.max())
+            metrics['targets']['BTCUSD'] = m
+        else:
+            warnings.append('BTC target skipped: no release-aligned liquidity rows inside the requested analysis window.')
 
     if include_equity and equity is not None and not equity.empty:
-        aligned_equity = attach_h41_alignment(feature_base, instrument_type='equity').set_index('effective_trade_at_utc')
-        m, _, _ = _target_analysis(aligned_equity, equity, target_symbol, horizons_weeks, run_dir)
-        metrics['targets'][target_symbol] = m
+        aligned_equity_all = attach_h41_alignment(feature_base_all, instrument_type='equity')
+        aligned_equity_window = _restrict_aligned_to_analysis_window(aligned_equity_all, start_date, end_date).set_index('effective_trade_at_utc')
+        write_csv(run_dir / f'{target_symbol}_net_liquidity_features_analysis_window.csv', aligned_equity_window)
+        if not aligned_equity_window.empty:
+            m, _, _ = _target_analysis(aligned_equity_window, equity, target_symbol, horizons_weeks, run_dir)
+            m['analysis_window_rows'] = int(len(aligned_equity_window))
+            m['target_price_start_utc'] = str(equity.index.min())
+            m['target_price_end_utc'] = str(equity.index.max())
+            metrics['targets'][target_symbol] = m
+        else:
+            warnings.append(f'{target_symbol} target skipped: no release-aligned liquidity rows inside the requested analysis window.')
 
     if not metrics['targets']:
         warnings.append('No target analyses were completed. Add CoinAPI/Massive/Alpaca credentials or run demo_mode=true.')

@@ -2,11 +2,11 @@
 
 A small, research-only FastAPI app for testing whether U.S. liquidity plumbing acts as a leading signal for BTC and Nasdaq/QQQ.
 
-**v0.1.2 hotfix:** removes the fragile `statsmodels` runtime dependency and uses a lightweight NumPy-based OLS/HAC implementation so the app starts reliably on Render with Python 3.12.
+**v0.1.3 hotfix:** fixes analysis-window leakage found in the first real evidence pack. Full pre-start FRED history is still used for rolling feature context, but analysed rows are now restricted to the requested release-aligned start/end window before target returns are attached.
 
 It is **not** a trading bot. It has no order routing, no brokerage actions, and no alerting layer.
 
-## What v0.1.2 does
+## What v0.1.3 does
 
 - Pulls official macro inputs from FRED public CSV endpoints:
   - `WALCL` = Federal Reserve total assets
@@ -15,6 +15,7 @@ It is **not** a trading bot. It has no order routing, no brokerage actions, and 
 - Optionally pulls BTC/USD daily history from CoinAPI.
 - Optionally pulls QQQ daily history from Massive or Alpaca.
 - Aligns H.4.1-style weekly macro information to a conservative public-release clock.
+- Restricts analysed rows to the requested effective tradable window, preventing pre-start macro rows from being attached to the first available target return.
 - Builds `NetLiquidity = FedAssets - TGA - ONRRP`.
 - Tests liquidity impulse against forward 1, 2, 4, and 8 week returns.
 - Produces a downloadable evidence pack containing CSVs, `metrics.json`, and `report.md`.
@@ -96,5 +97,12 @@ Do not treat a positive backtest as permission to trade. The first promotion gat
 
 ## v0.1.2 hotfix
 
-- Fixes CoinAPI OHLCV parsing under pandas 2.x by decoding response bytes before building a DataFrame.
-- Adds a regression test proving CoinAPI byte payloads no longer trigger `Expected file path name or file-like object, got <class bytes> type`.
+- Fixed CoinAPI OHLCV parsing under pandas 2.x by decoding response bytes before building a DataFrame.
+- Added a regression test proving CoinAPI byte payloads no longer trigger `Expected file path name or file-like object, got <class bytes> type`.
+
+## v0.1.3 hotfix
+
+- Fixed analysis-window leakage: FRED macro history can begin before the requested start date for rolling context, but only rows with `effective_trade_at_utc` inside the requested window are analysed.
+- Adds target-specific `*_net_liquidity_features_analysis_window.csv` files.
+- Renames the full macro audit file to `net_liquidity_features_full_context_unaligned.csv`.
+- Adds a regression test that catches pre-start macro rows being attached to first available target returns.
