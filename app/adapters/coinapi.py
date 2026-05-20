@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import pandas as pd
 from app.adapters.http import get_bytes, snapshot_payload
 
@@ -16,7 +17,15 @@ def fetch_ohlcv(symbol_id: str, api_key: str, *, start_iso: str, end_iso: str | 
     content = get_bytes(url, headers=headers, params=params)
     if raw_dir:
         snapshot_payload(raw_dir, f'coinapi_{symbol_id}', url, content, suffix='json')
-    df = pd.read_json(content)
+    # pandas.read_json no longer accepts raw bytes in current pandas versions.
+    # Decode the payload explicitly so Render does not fail with:
+    # 'Expected file path name or file-like object, got <class bytes> type'.
+    try:
+        payload = json.loads(content.decode('utf-8'))
+    except Exception as exc:
+        raise RuntimeError(f'CoinAPI returned a non-JSON OHLCV payload: {exc}') from exc
+    rows = payload if isinstance(payload, list) else payload.get('data', []) if isinstance(payload, dict) else []
+    df = pd.DataFrame(rows)
     if df.empty:
         return pd.DataFrame(columns=['date', 'close']).set_index('date')
     time_col = 'time_period_start'
