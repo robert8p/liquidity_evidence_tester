@@ -45,15 +45,40 @@ def price_to_weekly(price_df: pd.DataFrame) -> pd.Series:
 
 def forward_log_returns(price: pd.Series, horizons: list[int]) -> pd.DataFrame:
     out = pd.DataFrame(index=price.index)
+    out['target_anchor_utc'] = price.index
     for h in horizons:
         out[f'fwd_logret_{h}w'] = np.log(price.shift(-h) / price)
     return out
 
 
-def attach_forward_returns_to_features(features: pd.DataFrame, weekly_price: pd.Series, horizons: list[int]) -> pd.DataFrame:
+def attach_forward_returns_to_features(
+    features: pd.DataFrame,
+    weekly_price: pd.Series,
+    horizons: list[int],
+    *,
+    max_lookahead_days: int = 10,
+) -> pd.DataFrame:
+    """Attach forward returns to release-aligned features without backfilling stale target history.
+
+    The target return row must be the first available weekly target anchor after the
+    feature's tradable timestamp, but only if that anchor is close enough to be the
+    same/next weekly observation. Without a tolerance, pandas.merge_asof(direction='forward')
+    will attach the first target row to every earlier feature row if target price history
+    begins later than macro history. That was invalid for a real QQQ run where the equity
+    data vendor only returned prices from 2021 while the requested analysis began in 2018.
+    """
     returns = forward_log_returns(weekly_price, horizons)
-    # As-of joins: use next available weekly target price after feature effective date.
     left = features.copy().sort_index()
     right = returns.copy().sort_index()
-    aligned = pd.merge_asof(left, right, left_index=True, right_index=True, direction='forward')
+    tolerance = pd.Timedelta(days=max_lookahead_days) if max_lookahead_days is not None else None
+    aligned = pd.merge_asof(
+        left,
+        right,
+        left_index=True,
+        right_index=True,
+        direction='forward',
+        tolerance=tolerance,
+    )
+    if 'target_anchor_utc' in aligned.columns:
+        aligned['target_anchor_utc'] = pd.to_datetime(aligned['target_anchor_utc'], utc=True)
     return aligned

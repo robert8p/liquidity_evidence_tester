@@ -2,11 +2,11 @@
 
 A small, research-only FastAPI app for testing whether U.S. liquidity plumbing acts as a leading signal for BTC and Nasdaq/QQQ.
 
-**v0.1.3 hotfix:** fixes analysis-window leakage found in the first real evidence pack. Full pre-start FRED history is still used for rolling feature context, but analysed rows are now restricted to the requested release-aligned start/end window before target returns are attached.
+**v0.1.4 hotfix:** fixes target-history coverage leakage found in the second real evidence pack. If an equity/crypto data vendor returns target prices starting later than the requested analysis window, earlier release-aligned macro rows are now left as NaN instead of being backfilled with the first available target return.
 
 It is **not** a trading bot. It has no order routing, no brokerage actions, and no alerting layer.
 
-## What v0.1.3 does
+## What v0.1.4 does
 
 - Pulls official macro inputs from FRED public CSV endpoints:
   - `WALCL` = Federal Reserve total assets
@@ -106,3 +106,10 @@ Do not treat a positive backtest as permission to trade. The first promotion gat
 - Adds target-specific `*_net_liquidity_features_analysis_window.csv` files.
 - Renames the full macro audit file to `net_liquidity_features_full_context_unaligned.csv`.
 - Adds a regression test that catches pre-start macro rows being attached to first available target returns.
+
+
+## v0.1.4 hotfix
+
+- Adds a weekly target-return merge tolerance so missing early target history cannot be backfilled across years.
+- Adds `target_anchor_utc`, `matched_target_rows`, and target coverage warnings to evidence packs.
+- Keeps full macro context for rolling z-score reconstruction while preventing target-history leakage.

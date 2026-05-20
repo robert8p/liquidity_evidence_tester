@@ -66,6 +66,10 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
     weekly_price = price_to_weekly(price_df)
     analysis = attach_forward_returns_to_features(features_aligned, weekly_price, horizons)
     target_cols = [f'fwd_logret_{h}w' for h in horizons]
+    matched_target_rows = int(analysis['target_anchor_utc'].notna().sum()) if 'target_anchor_utc' in analysis.columns else int(analysis[target_cols].notna().any(axis=1).sum())
+    first_matched_target_anchor = None
+    if 'target_anchor_utc' in analysis.columns and matched_target_rows:
+        first_matched_target_anchor = str(analysis['target_anchor_utc'].dropna().min())
     corr = cross_corr_table(analysis, 'liq_impulse_z_52', target_cols)
     qrows = [quintile_spread(analysis, 'liq_impulse_z_52', c) for c in target_cols]
     rrows = [arx_regression(analysis, 'liq_impulse_z_52', c) for c in target_cols]
@@ -79,6 +83,8 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
     best_r = min([x for x in rrows if x.get('p') is not None], key=lambda x: x['p'], default={})
     metrics = {
         'rows': int(len(analysis.dropna(subset=['liq_impulse_z_52']))),
+        'matched_target_rows': matched_target_rows,
+        'first_matched_target_anchor_utc': first_matched_target_anchor,
         'best_quintile_target': best_q.get('target'),
         'best_quintile_spread': best_q.get('spread'),
         'best_regression_target': best_r.get('target'),
@@ -142,6 +148,8 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
             m['analysis_window_rows'] = int(len(aligned_crypto_window))
             m['target_price_start_utc'] = str(btc.index.min())
             m['target_price_end_utc'] = str(btc.index.max())
+            if m.get('matched_target_rows', 0) < len(aligned_crypto_window):
+                warnings.append(f"BTCUSD target coverage warning: only {m.get('matched_target_rows', 0)} of {len(aligned_crypto_window)} release-aligned rows matched target history within the weekly tolerance. Earlier rows were left as NaN instead of being backfilled.")
             metrics['targets']['BTCUSD'] = m
         else:
             warnings.append('BTC target skipped: no release-aligned liquidity rows inside the requested analysis window.')
@@ -155,6 +163,8 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
             m['analysis_window_rows'] = int(len(aligned_equity_window))
             m['target_price_start_utc'] = str(equity.index.min())
             m['target_price_end_utc'] = str(equity.index.max())
+            if m.get('matched_target_rows', 0) < len(aligned_equity_window):
+                warnings.append(f"{target_symbol} target coverage warning: only {m.get('matched_target_rows', 0)} of {len(aligned_equity_window)} release-aligned rows matched target history within the weekly tolerance. Earlier rows were left as NaN instead of being backfilled.")
             metrics['targets'][target_symbol] = m
         else:
             warnings.append(f'{target_symbol} target skipped: no release-aligned liquidity rows inside the requested analysis window.')

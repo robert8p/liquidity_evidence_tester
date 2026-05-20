@@ -29,3 +29,22 @@ def test_release_aligned_analysis_window_prevents_pre_start_target_return_attach
     analysis = attach_forward_returns_to_features(aligned_window, price_to_weekly(prices), [1, 4])
     assert analysis.index.min() >= pd.Timestamp('2018-01-01T00:00:00Z')
     assert len(analysis) < len(features)
+
+
+def test_target_history_starting_late_is_not_backfilled_across_years():
+    # Release-aligned features start in 2018, but target prices only start in 2021
+    # (matching the real Massive Stock Starter response observed in production).
+    feature_idx = pd.date_range('2018-01-05T14:30:00Z', '2021-06-30T14:30:00Z', freq='W-FRI')
+    features = pd.DataFrame({'liq_impulse_z_52': range(len(feature_idx))}, index=feature_idx)
+    price_idx = pd.date_range('2021-05-21T04:00:00Z', '2021-06-30T04:00:00Z', freq='W-FRI')
+    prices = pd.Series([100 + i for i in range(len(price_idx))], index=price_idx, name='close')
+
+    analysis = attach_forward_returns_to_features(features, prices, [1, 2])
+
+    pre_coverage = analysis[analysis.index < pd.Timestamp('2021-05-01T00:00:00Z')]
+    assert pre_coverage['target_anchor_utc'].isna().all()
+    assert pre_coverage['fwd_logret_1w'].isna().all()
+
+    matched = analysis[analysis['target_anchor_utc'].notna()]
+    assert not matched.empty
+    assert matched.index.min() >= pd.Timestamp('2021-05-14T00:00:00Z')
