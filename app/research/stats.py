@@ -214,3 +214,87 @@ def validation_label(metrics: dict, *, coverage_ratio: float | None = None) -> d
         reasons.append('Best quintile spread is economically small or unavailable.')
     status = 'validated_candidate' if not reasons else 'not_validated'
     return {'status': status, 'reasons': reasons}
+
+
+def screen_feature_grid(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    target_cols: list[str],
+    *,
+    min_n: int = 80,
+) -> pd.DataFrame:
+    """Evaluate a small, pre-declared grid of interpretable signal variants.
+
+    This is a discovery screen only. Rows are ranked to decide what deserves deeper
+    validation; they are not trading signals and should not be promoted without a
+    separate out-of-sample/live-shadow pass.
+    """
+    rows: list[dict] = []
+    for feature in feature_cols:
+        if feature not in df.columns:
+            continue
+        for target in target_cols:
+            if target not in df.columns:
+                continue
+            valid = df[[feature, target]].dropna()
+            if len(valid) < min_n or valid[feature].nunique() < 5:
+                rows.append({
+                    'feature': feature,
+                    'target': target,
+                    'n': int(len(valid)),
+                    'screen_status': 'insufficient_data',
+                    'reason': f'Fewer than {min_n} valid rows or too few feature values.',
+                })
+                continue
+            q = quintile_spread(df, feature, target)
+            r = arx_regression(df, feature, target)
+            oos = expanding_directional_oos(df, feature, target)
+            s = summary_from_oos(oos)
+            validation = validation_label({
+                'best_regression_p': r.get('p'),
+                'best_quintile_spread': q.get('spread'),
+                'oos': s,
+            }, coverage_ratio=1.0)
+            corr = valid[feature].corr(valid[target]) if len(valid) >= min_n else np.nan
+
+            spread = q.get('spread')
+            excess = s.get('excess_mean_return_vs_always_long')
+            lift = s.get('directional_accuracy_lift_vs_always_long')
+            p = r.get('p')
+            score = 0.0
+            if spread is not None and np.isfinite(spread):
+                score += min(abs(float(spread)), 0.25)
+            if excess is not None and np.isfinite(excess):
+                score += max(float(excess), 0.0) * 2.0
+            if lift is not None and np.isfinite(lift):
+                score += max(float(lift), 0.0)
+            if p is not None and np.isfinite(p):
+                score += max(0.0, 0.10 - float(p))
+
+            rows.append({
+                'feature': feature,
+                'target': target,
+                'n': int(len(valid)),
+                'corr': None if pd.isna(corr) else float(corr),
+                'quintile_spread': q.get('spread'),
+                'quintile_top_mean': q.get('top_mean'),
+                'quintile_bottom_mean': q.get('bottom_mean'),
+                'regression_coef': r.get('coef'),
+                'regression_t': r.get('t'),
+                'regression_p': r.get('p'),
+                'oos_n': s.get('n'),
+                'oos_directional_accuracy': s.get('directional_accuracy'),
+                'oos_always_long_hit_rate': s.get('always_long_hit_rate'),
+                'oos_accuracy_lift_vs_always_long': s.get('directional_accuracy_lift_vs_always_long'),
+                'oos_mean_signal_return': s.get('mean_signal_return'),
+                'oos_always_long_mean_return': s.get('always_long_mean_return'),
+                'oos_excess_mean_return_vs_always_long': s.get('excess_mean_return_vs_always_long'),
+                'signal_long_fraction': s.get('signal_long_fraction'),
+                'screen_status': validation.get('status'),
+                'reason': '; '.join(validation.get('reasons') or []),
+                'screen_score': float(score),
+            })
+    out = pd.DataFrame(rows)
+    if not out.empty and 'screen_score' in out.columns:
+        out = out.sort_values(['screen_status', 'screen_score'], ascending=[True, False]).reset_index(drop=True)
+    return out

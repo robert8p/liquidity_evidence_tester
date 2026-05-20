@@ -2,11 +2,11 @@
 
 A small, research-only FastAPI app for testing whether U.S. liquidity plumbing acts as a leading signal for BTC and Nasdaq/QQQ.
 
-**v0.1.5 hotfix:** fixes target-history coverage leakage found in the second real evidence pack. If an equity/crypto data vendor returns target prices starting later than the requested analysis window, earlier release-aligned macro rows are now left as NaN instead of being backfilled with the first available target return.
+**v0.2.0 hotfix:** fixes target-history coverage leakage found in the second real evidence pack. If an equity/crypto data vendor returns target prices starting later than the requested analysis window, earlier release-aligned macro rows are now left as NaN instead of being backfilled with the first available target return.
 
 It is **not** a trading bot. It has no order routing, no brokerage actions, and no alerting layer.
 
-## What v0.1.5 does
+## What v0.2.0 does
 
 - Pulls official macro inputs from FRED public CSV endpoints:
   - `WALCL` = Federal Reserve total assets
@@ -108,13 +108,18 @@ Do not treat a positive backtest as permission to trade. The first promotion gat
 - Adds a regression test that catches pre-start macro rows being attached to first available target returns.
 
 
-## v0.1.5 hotfix
+## v0.2.0 hotfix
 
 - Adds a weekly target-return merge tolerance so missing early target history cannot be backfilled across years.
 - Adds `target_anchor_utc`, `matched_target_rows`, and target coverage warnings to evidence packs.
 - Keeps full macro context for rolling z-score reconstruction while preventing target-history leakage.
 
 
-## v0.1.5
+## v0.2.0
 
 Adds baseline-aware validation so OOS accuracy is compared with always-long/always-short baselines and materially one-sided signals are flagged.
+
+
+## v0.2.0
+
+Adds a pre-declared liquidity signal-variant screen across weekly/4-week/13-week impulses, level z-score, TGA drain, RRP release, and simple composites. The screen is discovery-only and keeps the app research-only: no trading, no order routing, no alerts.

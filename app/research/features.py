@@ -31,9 +31,23 @@ def build_net_liquidity(
     df['net_liquidity_bil'] = df['fed_assets_bil'] - df['tga_bil'] - df['onrrp_bil']
     df['liq_impulse_1w_bil'] = df['net_liquidity_bil'].diff()
     df['liq_impulse_4w_bil'] = df['net_liquidity_bil'].diff(4)
+    df['liq_impulse_13w_bil'] = df['net_liquidity_bil'].diff(13)
+
+    # Primary and challenger signal definitions. These are deliberately simple,
+    # interpretable liquidity constructions; the screen is for falsification, not
+    # curve-fitting or model selection for live trading.
     df['liq_impulse_z_52'] = rolling_zscore(df['liq_impulse_1w_bil'], 52)
+    df['liq_impulse_4w_z_52'] = rolling_zscore(df['liq_impulse_4w_bil'], 52)
+    df['liq_impulse_13w_z_104'] = rolling_zscore(df['liq_impulse_13w_bil'], 104, min_periods=52)
+    df['net_liquidity_level_z_156'] = rolling_zscore(df['net_liquidity_bil'], 156, min_periods=52)
+
     df['tga_drain_z_52'] = rolling_zscore(-df['tga_bil'].diff(), 52)
+    df['tga_drain_4w_z_52'] = rolling_zscore(-df['tga_bil'].diff(4), 52)
     df['rrp_release_z_52'] = rolling_zscore(-df['onrrp_bil'].diff(), 52)
+    df['rrp_release_4w_z_52'] = rolling_zscore(-df['onrrp_bil'].diff(4), 52)
+
+    df['liquidity_composite_z'] = df[['liq_impulse_z_52', 'tga_drain_z_52', 'rrp_release_z_52']].mean(axis=1)
+    df['liquidity_composite_4w_z'] = df[['liq_impulse_4w_z_52', 'tga_drain_4w_z_52', 'rrp_release_4w_z_52']].mean(axis=1)
     return df.dropna(subset=['liq_impulse_1w_bil']).sort_index()
 
 

@@ -12,9 +12,22 @@ from app.config import Settings
 from app.release_calendar import attach_h41_alignment
 from app.research.demo import synthetic_macro_and_prices
 from app.research.features import build_net_liquidity, price_to_weekly, attach_forward_returns_to_features
-from app.research.stats import cross_corr_table, quintile_spread, arx_regression, expanding_directional_oos, summary_from_oos, validation_label
+from app.research.stats import cross_corr_table, quintile_spread, arx_regression, expanding_directional_oos, summary_from_oos, validation_label, screen_feature_grid
 from app.research.reporting import write_csv, write_markdown_report
 from app.utils import run_id, utc_now_iso, write_json, zip_dir
+
+SCREEN_FEATURES = [
+    'liq_impulse_z_52',
+    'liq_impulse_4w_z_52',
+    'liq_impulse_13w_z_104',
+    'net_liquidity_level_z_156',
+    'tga_drain_z_52',
+    'tga_drain_4w_z_52',
+    'rrp_release_z_52',
+    'rrp_release_4w_z_52',
+    'liquidity_composite_z',
+    'liquidity_composite_4w_z',
+]
 
 
 def _fetch_equity(settings: Settings, symbol: str, start_date: str, end_date: str, raw_dir: Path, warnings: list[str]) -> pd.DataFrame | None:
@@ -62,7 +75,7 @@ def _restrict_aligned_to_analysis_window(features_aligned: pd.DataFrame, start_d
     return out[(out['effective_trade_at_utc'] >= start_ts) & (out['effective_trade_at_utc'] <= end_ts)].copy()
 
 
-def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, target_name: str, horizons: list[int], run_dir: Path) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, target_name: str, horizons: list[int], run_dir: Path, *, screen_features: bool = True) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     weekly_price = price_to_weekly(price_df)
     analysis = attach_forward_returns_to_features(features_aligned, weekly_price, horizons)
     target_cols = [f'fwd_logret_{h}w' for h in horizons]
@@ -81,6 +94,28 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
     pd.DataFrame(qrows).to_csv(run_dir / f'{target_name}_quintile_spreads.csv', index=False)
     pd.DataFrame(rrows).to_csv(run_dir / f'{target_name}_arx_regressions.csv', index=False)
     oos.to_csv(run_dir / f'{target_name}_oos_predictions.csv', index=False)
+
+    screen_summary = {}
+    if screen_features:
+        screen = screen_feature_grid(analysis, SCREEN_FEATURES, target_cols)
+        screen.to_csv(run_dir / f'{target_name}_signal_variant_screen.csv', index=False)
+        usable = screen[screen.get('screen_status', pd.Series(dtype=str)) != 'insufficient_data'] if not screen.empty else screen
+        if not usable.empty:
+            top = usable.sort_values('screen_score', ascending=False).head(5)
+            screen_summary = {
+                'candidate_count': int(len(usable)),
+                'validated_candidate_count': int((usable['screen_status'] == 'validated_candidate').sum()),
+                'top_candidates': top.to_dict(orient='records'),
+                'note': 'Signal-variant screen is discovery evidence only; promote nothing without separate OOS/live-shadow confirmation.',
+            }
+        else:
+            screen_summary = {
+                'candidate_count': 0,
+                'validated_candidate_count': 0,
+                'top_candidates': [],
+                'note': 'No signal variants had enough data for screening.',
+            }
+
     best_q = max([x for x in qrows if x.get('spread') is not None], key=lambda x: abs(x['spread']), default={})
     best_r = min([x for x in rrows if x.get('p') is not None], key=lambda x: x['p'], default={})
     metrics = {
@@ -96,12 +131,13 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, tar
         'best_regression_t': best_r.get('t'),
         'best_regression_p': best_r.get('p'),
         'oos': summary_from_oos(oos),
+        'signal_variant_screen': screen_summary,
     }
     metrics['validation'] = validation_label(metrics, coverage_ratio=target_coverage_ratio)
     return metrics, analysis, corr
 
 
-def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | None, target_symbol: str, include_btc: bool, include_equity: bool, demo_mode: bool, horizons_weeks: list[int]) -> dict:
+def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | None, target_symbol: str, include_btc: bool, include_equity: bool, demo_mode: bool, horizons_weeks: list[int], screen_features: bool = True) -> dict:
     rid = run_id('netliq')
     run_dir = settings.data_dir / 'runs' / rid
     raw_dir = settings.data_dir / 'raw' / rid
@@ -137,6 +173,8 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
         'start_date': start_date,
         'end_date': end_date,
         'feature_rows_full_context': int(len(feature_base_all)),
+        'screen_features': bool(screen_features),
+        'screen_feature_names': SCREEN_FEATURES if screen_features else [],
         'targets': {},
         'warnings': warnings,
     }
@@ -149,7 +187,7 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
         aligned_crypto_window = _restrict_aligned_to_analysis_window(aligned_crypto_all, start_date, end_date).set_index('effective_trade_at_utc')
         write_csv(run_dir / 'BTCUSD_net_liquidity_features_analysis_window.csv', aligned_crypto_window)
         if not aligned_crypto_window.empty:
-            m, _, _ = _target_analysis(aligned_crypto_window, btc, 'BTCUSD', horizons_weeks, run_dir)
+            m, _, _ = _target_analysis(aligned_crypto_window, btc, 'BTCUSD', horizons_weeks, run_dir, screen_features=screen_features)
             m['analysis_window_rows'] = int(len(aligned_crypto_window))
             m['target_price_start_utc'] = str(btc.index.min())
             m['target_price_end_utc'] = str(btc.index.max())
@@ -164,7 +202,7 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
         aligned_equity_window = _restrict_aligned_to_analysis_window(aligned_equity_all, start_date, end_date).set_index('effective_trade_at_utc')
         write_csv(run_dir / f'{target_symbol}_net_liquidity_features_analysis_window.csv', aligned_equity_window)
         if not aligned_equity_window.empty:
-            m, _, _ = _target_analysis(aligned_equity_window, equity, target_symbol, horizons_weeks, run_dir)
+            m, _, _ = _target_analysis(aligned_equity_window, equity, target_symbol, horizons_weeks, run_dir, screen_features=screen_features)
             m['analysis_window_rows'] = int(len(aligned_equity_window))
             m['target_price_start_utc'] = str(equity.index.min())
             m['target_price_end_utc'] = str(equity.index.max())

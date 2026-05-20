@@ -11,6 +11,7 @@ class NetLiquidityRunRequest(BaseModel):
     include_equity: bool = True
     demo_mode: bool = False
     horizons_weeks: list[int] = Field(default_factory=lambda: [1, 2, 4, 8])
+    screen_features: bool = Field(default=True, description='Run a pre-declared liquidity signal variant screen.')
 
 
 class RunSummary(BaseModel):

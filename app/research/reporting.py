@@ -46,6 +46,27 @@ def write_markdown_report(run_dir: Path, metrics: dict, warnings: list[str]) -> 
         for k, v in m.items():
             lines.append(f'| {k} | {_format_value(v)} |')
         lines.append('')
+    lines.extend(['## Signal variant screen', ''])
+    lines.append('This section tests pre-declared variants of the liquidity signal. It is discovery evidence only; it should not be treated as a trading model-selection result.')
+    lines.append('')
+    for target, m in metrics.get('targets', {}).items():
+        screen = m.get('signal_variant_screen') or {}
+        lines.append(f"### {target} signal variants")
+        lines.append('')
+        lines.append(f"- Candidates screened: {screen.get('candidate_count', 0)}")
+        lines.append(f"- Validated candidates under conservative gate: {screen.get('validated_candidate_count', 0)}")
+        top = screen.get('top_candidates') or []
+        if top:
+            lines.append('')
+            lines.append('| Rank | Feature | Horizon | Status | Spread | Regression p | OOS excess vs always-long | Long fraction |')
+            lines.append('|---:|---|---|---|---:|---:|---:|---:|')
+            for i, row in enumerate(top[:5], start=1):
+                lines.append(
+                    f"| {i} | {row.get('feature')} | {row.get('target')} | {row.get('screen_status')} | "
+                    f"{_format_value(row.get('quintile_spread'))} | {_format_value(row.get('regression_p'))} | "
+                    f"{_format_value(row.get('oos_excess_mean_return_vs_always_long'))} | {_format_value(row.get('signal_long_fraction'))} |"
+                )
+        lines.append('')
     if warnings:
         lines.extend(['## Warnings', ''])
         for w in warnings:

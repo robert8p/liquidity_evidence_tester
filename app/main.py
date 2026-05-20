@@ -42,6 +42,7 @@ def home() -> str:
         <p>Tests Fed assets − TGA − ON RRP as a leading signal for BTC and QQQ/Nasdaq proxy.</p>
         <label>Start date <input id="start" value="2018-01-01" /></label>
         <label>Equity target <input id="target" value="{settings.equity_target_symbol}" /></label>
+        <label><input id="screen" type="checkbox" checked /> Screen liquidity signal variants</label>
         <br/><br/>
         <button class="primary" onclick="run(false)">Run with configured APIs</button>
         <button class="secondary" onclick="run(true)">Run demo mode</button>
@@ -65,7 +66,8 @@ def home() -> str:
             include_btc: true,
             include_equity: true,
             demo_mode: demo,
-            horizons_weeks: [1,2,4,8]
+            horizons_weeks: [1,2,4,8],
+            screen_features: document.getElementById('screen').checked
           }};
           const res = await fetch('/api/run/net-liquidity', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});
           const data = await res.json();
@@ -127,6 +129,7 @@ def run_net_liquidity_endpoint(req: NetLiquidityRunRequest) -> JSONResponse:
             include_equity=req.include_equity,
             demo_mode=req.demo_mode,
             horizons_weeks=req.horizons_weeks,
+            screen_features=req.screen_features,
         )
         return JSONResponse(result)
     except Exception as exc:
