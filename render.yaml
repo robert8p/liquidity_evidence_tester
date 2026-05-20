@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: liquidity-evidence-tester
+    env: docker
+    plan: starter
+    autoDeploy: false
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: APP_TITLE
+        value: Liquidity Evidence Tester
+      - key: EQUITY_SOURCE
+        value: massive
+      - key: EQUITY_TARGET_SYMBOL
+        value: QQQ
+      - key: COINAPI_BTC_SYMBOL_ID
+        value: COINBASE_SPOT_BTC_USD
+      - key: COINAPI_KEY
+        sync: false
+      - key: ALPACA_KEY_ID
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
+      - key: MASSIVE_API_KEY
+        sync: false
