@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import warnings
+import math
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
 
 def cross_corr_table(df: pd.DataFrame, feature_col: str, target_cols: list[str]) -> pd.DataFrame:
@@ -37,24 +36,78 @@ def quintile_spread(df: pd.DataFrame, feature_col: str, target_col: str) -> dict
     }
 
 
+def _as_2d_array(df: pd.DataFrame | pd.Series) -> np.ndarray:
+    arr = df.to_numpy(dtype=float)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    return arr
+
+
+def _ols_beta(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    # lstsq is more stable than explicitly inverting X'X and avoids scipy/statsmodels.
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return beta
+
+
+def _normal_two_sided_pvalue(t_stat: float | None) -> float | None:
+    if t_stat is None or not np.isfinite(t_stat):
+        return None
+    # Two-sided normal approximation. Good enough for screening; avoids scipy runtime dependency.
+    return float(math.erfc(abs(float(t_stat)) / math.sqrt(2.0)))
+
+
+def _hac_covariance(X: np.ndarray, residuals: np.ndarray, maxlags: int = 4) -> np.ndarray:
+    """Newey-West/HAC covariance estimator implemented with NumPy only.
+
+    This intentionally replaces statsmodels so the app starts reliably on Render even
+    when SciPy/statsmodels binary compatibility changes. It is a lightweight research
+    screening estimator, not a full econometrics package.
+    """
+    n, k = X.shape
+    if n <= k + 1:
+        return np.full((k, k), np.nan)
+
+    xtx_inv = np.linalg.pinv(X.T @ X)
+    xu = X * residuals.reshape(-1, 1)
+    s = xu.T @ xu
+    maxlags = max(0, min(int(maxlags), n - 1))
+    for lag in range(1, maxlags + 1):
+        weight = 1.0 - lag / (maxlags + 1.0)
+        gamma = xu[lag:].T @ xu[:-lag]
+        s += weight * (gamma + gamma.T)
+    return xtx_inv @ s @ xtx_inv
+
+
 def arx_regression(df: pd.DataFrame, feature_col: str, target_col: str) -> dict:
     valid = df[[feature_col, target_col]].dropna().copy()
     if len(valid) < 40:
         return {'target': target_col, 'n': len(valid), 'coef': None, 't': None, 'p': None, 'r2': None}
     valid['y_lag1'] = valid[target_col].shift(1)
     valid = valid.dropna()
-    X = sm.add_constant(valid[[feature_col, 'y_lag1']])
-    y = valid[target_col]
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        model = sm.OLS(y, X).fit(cov_type='HAC', cov_kwds={'maxlags': 4})
+    if len(valid) < 40:
+        return {'target': target_col, 'n': len(valid), 'coef': None, 't': None, 'p': None, 'r2': None}
+
+    y = valid[target_col].to_numpy(dtype=float)
+    x_raw = _as_2d_array(valid[[feature_col, 'y_lag1']])
+    X = np.column_stack([np.ones(len(valid)), x_raw])
+    beta = _ols_beta(X, y)
+    fitted = X @ beta
+    residuals = y - fitted
+    ss_res = float(np.sum(residuals ** 2))
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    r2 = None if ss_tot == 0 else float(1.0 - ss_res / ss_tot)
+
+    cov = _hac_covariance(X, residuals, maxlags=4)
+    se = np.sqrt(np.diag(cov)) if np.all(np.isfinite(cov)) else np.full(X.shape[1], np.nan)
+    coef = float(beta[1]) if len(beta) > 1 else np.nan
+    t_stat = float(beta[1] / se[1]) if len(se) > 1 and se[1] and np.isfinite(se[1]) else None
     return {
         'target': target_col,
-        'n': int(model.nobs),
-        'coef': float(model.params.get(feature_col, np.nan)),
-        't': float(model.tvalues.get(feature_col, np.nan)),
-        'p': float(model.pvalues.get(feature_col, np.nan)),
-        'r2': float(model.rsquared),
+        'n': int(len(valid)),
+        'coef': coef if np.isfinite(coef) else None,
+        't': t_stat,
+        'p': _normal_two_sided_pvalue(t_stat),
+        'r2': r2,
     }
 
 
@@ -66,12 +119,13 @@ def expanding_directional_oos(df: pd.DataFrame, feature_col: str, target_col: st
     for i in range(min_train, len(valid) - 1):
         train = valid.iloc[:i]
         test = valid.iloc[i:i + 1]
-        X_train = sm.add_constant(train[[feature_col]])
-        y_train = train[target_col]
         try:
-            model = sm.OLS(y_train, X_train).fit()
-            X_test = sm.add_constant(test[[feature_col]], has_constant='add')
-            pred = float(model.predict(X_test).iloc[0])
+            y_train = train[target_col].to_numpy(dtype=float)
+            x_train = train[[feature_col]].to_numpy(dtype=float)
+            X_train = np.column_stack([np.ones(len(train)), x_train])
+            beta = _ols_beta(X_train, y_train)
+            X_test = np.array([[1.0, float(test[feature_col].iloc[0])]])
+            pred = float((X_test @ beta)[0])
         except Exception:
             continue
         actual = float(test[target_col].iloc[0])

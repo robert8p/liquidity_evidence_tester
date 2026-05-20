@@ -2,9 +2,11 @@
 
 A small, research-only FastAPI app for testing whether U.S. liquidity plumbing acts as a leading signal for BTC and Nasdaq/QQQ.
 
+**v0.1.1 hotfix:** removes the fragile `statsmodels` runtime dependency and uses a lightweight NumPy-based OLS/HAC implementation so the app starts reliably on Render with Python 3.12.
+
 It is **not** a trading bot. It has no order routing, no brokerage actions, and no alerting layer.
 
-## What v0.1.0 does
+## What v0.1.1 does
 
 - Pulls official macro inputs from FRED public CSV endpoints:
   - `WALCL` = Federal Reserve total assets
@@ -88,4 +90,5 @@ Do not treat a positive backtest as permission to trade. The first promotion gat
 - U.S. equity holiday calendars are approximated as weekdays only.
 - FRED chart CSV endpoint is used for simplicity; ALFRED vintage-aware data is not yet implemented.
 - CFTC and VVIX/VIX adapters are included as extension modules but the operator UI currently focuses on the first priority module: net liquidity → BTC/QQQ.
+- Regression p-values use a normal approximation in the lightweight in-app estimator; this is acceptable for screening/falsification but not a substitute for a full econometrics review.
 - Massive and Alpaca endpoint entitlements vary by account; check your dashboard if a request fails.
