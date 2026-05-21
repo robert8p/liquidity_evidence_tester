@@ -14,6 +14,14 @@ class NetLiquidityRunRequest(BaseModel):
     screen_features: bool = Field(default=True, description='Run a pre-declared liquidity signal variant screen.')
 
 
+class CftcJpyRunRequest(BaseModel):
+    start_date: str = Field(default='2012-01-01', description='YYYY-MM-DD')
+    end_date: str | None = Field(default=None, description='YYYY-MM-DD; defaults to today')
+    demo_mode: bool = False
+    horizons_weeks: list[int] = Field(default_factory=lambda: [1, 2, 4, 8])
+    screen_features: bool = Field(default=True, description='Run a pre-declared CFTC JPY signal variant screen.')
+
+
 class RunSummary(BaseModel):
     run_id: str
     status: str

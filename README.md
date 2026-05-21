@@ -1,125 +1,46 @@
 # Liquidity Evidence Tester
 
-A small, research-only FastAPI app for testing whether U.S. liquidity plumbing acts as a leading signal for BTC and Nasdaq/QQQ.
+Research-only FastAPI app for testing timestamp-aligned market relationships. It is **not** a trading bot, does not place orders, and does not send alerts.
 
-**v0.2.0 hotfix:** fixes target-history coverage leakage found in the second real evidence pack. If an equity/crypto data vendor returns target prices starting later than the requested analysis window, earlier release-aligned macro rows are now left as NaN instead of being backfilled with the first available target return.
+## Current modules
 
-It is **not** a trading bot. It has no order routing, no brokerage actions, and no alerting layer.
+1. **U.S. net liquidity → BTC / QQQ**
+   - Signal: Fed assets − Treasury General Account − ON RRP.
+   - Uses conservative H.4.1-style release alignment.
+   - v0.2.0 evidence did not validate the standalone thesis, but the module is retained for reruns and audit.
 
-## What v0.2.0 does
+2. **CFTC JPY positioning → USD/JPY**
+   - Signal: CFTC Traders in Financial Futures leveraged-fund Japanese-yen positioning.
+   - Treats CFTC positions as Tuesday observations released Friday 15:30 ET.
+   - Uses FRED USD/JPY daily history (`DEXJPUS`) as the initial public target series.
 
-- Pulls official macro inputs from FRED public CSV endpoints:
-  - `WALCL` = Federal Reserve total assets
-  - `WTREGEN` = Treasury General Account proxy
-  - `RRPONTSYD` = overnight reverse repo operations
-- Optionally pulls BTC/USD daily history from CoinAPI.
-- Optionally pulls QQQ daily history from Massive or Alpaca.
-- Aligns H.4.1-style weekly macro information to a conservative public-release clock.
-- Restricts analysed rows to the requested effective tradable window, preventing pre-start macro rows from being attached to the first available target return.
-- Builds `NetLiquidity = FedAssets - TGA - ONRRP`.
-- Tests liquidity impulse against forward 1, 2, 4, and 8 week returns.
-- Produces a downloadable evidence pack containing CSVs, `metrics.json`, and `report.md`.
-- Includes demo mode using synthetic data so the app can be validated before API credentials are added.
+## Deploy on Render
 
-## Key endpoints
-
-- `/` — operator UI
-- `/health` — service and credential status
-- `/api/config` — active data-source configuration
-- `POST /api/run/net-liquidity` — run the evidence test
-- `/api/runs/latest` — latest run summary
-- `/api/evidence/latest.zip` — latest evidence pack
-
-## Environment variables
-
-Copy `.env.example` to `.env` locally or set these in Render:
+Use Docker. Add a persistent disk mounted at `/var/data` and set:
 
 ```bash
-COINAPI_KEY=
-ALPACA_KEY_ID=
-ALPACA_SECRET_KEY=
-MASSIVE_API_KEY=
 DATA_DIR=/var/data
-EQUITY_SOURCE=massive
-EQUITY_TARGET_SYMBOL=QQQ
-COINAPI_BTC_SYMBOL_ID=COINBASE_SPOT_BTC_USD
+COINAPI_KEY=...
+MASSIVE_API_KEY=...
+# optional if using Alpaca for QQQ
+EQUITY_SOURCE=alpaca
+ALPACA_KEY_ID=...
+ALPACA_SECRET_KEY=...
 ```
 
-`EQUITY_SOURCE` can be `massive` or `alpaca`.
+CFTC/FRED module does not require a paid credential.
 
-## Local run
+## Operator workflow
 
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+1. Open `/health`.
+2. Open `/`.
+3. Run demo mode first for either module.
+4. Run the configured historical test.
+5. Download `/api/evidence/latest.zip`.
+6. Upload the evidence ZIP back to ChatGPT for interpretation.
 
-Then open `http://127.0.0.1:8000` and click **Run demo mode**.
+## Evidence gates
 
-## Render deployment
+The app applies conservative validation labels. A candidate fails if it lacks statistical support, fails to beat always-long/always-short baselines, has materially one-sided predictions, or has poor target coverage.
 
-1. Upload this repo to GitHub.
-2. Create a new Render Web Service from the repo.
-3. Use Docker environment.
-4. Add a persistent disk mounted at `/var/data`.
-5. Add these secret environment variables:
-   - `COINAPI_KEY`
-   - `MASSIVE_API_KEY` or Alpaca keys
-   - `ALPACA_KEY_ID`
-   - `ALPACA_SECRET_KEY`
-6. Deploy.
-7. Open `/health`.
-8. Open `/` and run demo mode first.
-9. Run with configured APIs.
-10. Download `/api/evidence/latest.zip` and upload it back for interpretation.
-
-## Evidence discipline
-
-Do not treat a positive backtest as permission to trade. The first promotion gate should be:
-
-1. No look-ahead timing failure.
-2. Expected sign across more than one horizon.
-3. Quintile spread positive after costs.
-4. Regression coefficient sign-stable.
-5. Out-of-sample directional result better than chance.
-6. Live-shadow evidence later agrees with the historical result.
-
-## Known v1 limitations
-
-- U.S. equity holiday calendars are approximated as weekdays only.
-- FRED chart CSV endpoint is used for simplicity; ALFRED vintage-aware data is not yet implemented.
-- CFTC and VVIX/VIX adapters are included as extension modules but the operator UI currently focuses on the first priority module: net liquidity → BTC/QQQ.
-- Regression p-values use a normal approximation in the lightweight in-app estimator; this is acceptable for screening/falsification but not a substitute for a full econometrics review.
-- Massive and Alpaca endpoint entitlements vary by account; check your dashboard if a request fails.
-
-
-## v0.1.2 hotfix
-
-- Fixed CoinAPI OHLCV parsing under pandas 2.x by decoding response bytes before building a DataFrame.
-- Added a regression test proving CoinAPI byte payloads no longer trigger `Expected file path name or file-like object, got <class bytes> type`.
-
-## v0.1.3 hotfix
-
-- Fixed analysis-window leakage: FRED macro history can begin before the requested start date for rolling context, but only rows with `effective_trade_at_utc` inside the requested window are analysed.
-- Adds target-specific `*_net_liquidity_features_analysis_window.csv` files.
-- Renames the full macro audit file to `net_liquidity_features_full_context_unaligned.csv`.
-- Adds a regression test that catches pre-start macro rows being attached to first available target returns.
-
-
-## v0.2.0 hotfix
-
-- Adds a weekly target-return merge tolerance so missing early target history cannot be backfilled across years.
-- Adds `target_anchor_utc`, `matched_target_rows`, and target coverage warnings to evidence packs.
-- Keeps full macro context for rolling z-score reconstruction while preventing target-history leakage.
-
-
-## v0.2.0
-
-Adds baseline-aware validation so OOS accuracy is compared with always-long/always-short baselines and materially one-sided signals are flagged.
-
-
-## v0.2.0
-
-Adds a pre-declared liquidity signal-variant screen across weekly/4-week/13-week impulses, level z-score, TGA drain, RRP release, and simple composites. The screen is discovery-only and keeps the app research-only: no trading, no order routing, no alerts.
+Positive historical results are only candidates for deeper validation, not permission to trade.

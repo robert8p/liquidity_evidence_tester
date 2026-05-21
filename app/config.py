@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +24,7 @@ class Settings(BaseSettings):
     fred_fed_assets_series: str = 'WALCL'
     fred_tga_series: str = 'WTREGEN'
     fred_onrrp_series: str = 'RRPONTSYD'
+    fred_usdjpy_series: str = Field(default='DEXJPUS', alias='FRED_USDJPY_SERIES')
 
     # FRED WALCL and WTREGEN are commonly millions USD; RRPONTSYD is often billions USD.
     # We normalise all to billions for the net-liquidity feature.

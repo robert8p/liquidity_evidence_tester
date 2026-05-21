@@ -21,7 +21,6 @@ def h41_release_time(observed_at_utc: pd.Timestamp) -> pd.Timestamp:
     If a source date is already Thursday, the same Thursday 16:30 ET is used.
     """
     dt_ny = _to_ny_date(observed_at_utc)
-    # Weekday: Monday=0, Wednesday=2, Thursday=3
     days_to_thursday = (3 - dt_ny.weekday()) % 7
     release_date = (dt_ny + timedelta(days=days_to_thursday)).date()
     release_dt = datetime.combine(release_date, time(16, 30), tzinfo=NY)
@@ -62,6 +61,23 @@ def next_utc_midnight_after(ts_utc: pd.Timestamp) -> pd.Timestamp:
     return pd.Timestamp(nxt)
 
 
+def next_fx_week_open_after(ts_utc: pd.Timestamp) -> pd.Timestamp:
+    """Conservative FX timestamp after a Friday CFTC release.
+
+    Spot FX trades Sunday evening New York time. For daily/weekly public-price evidence we
+    anchor to Monday 00:00 UTC or the next weekday 00:00 UTC if the release is not Friday.
+    This avoids using same-Friday prices that may have been fixed before the 15:30 ET CFTC
+    release.
+    """
+    if ts_utc.tzinfo is None:
+        ts_utc = ts_utc.tz_localize('UTC')
+    dt_utc = ts_utc.tz_convert('UTC').to_pydatetime()
+    candidate = datetime(dt_utc.year, dt_utc.month, dt_utc.day, tzinfo=UTC) + timedelta(days=1)
+    while candidate.weekday() >= 5:  # Saturday/Sunday -> Monday
+        candidate += timedelta(days=1)
+    return pd.Timestamp(candidate)
+
+
 def attach_h41_alignment(df: pd.DataFrame, instrument_type: str) -> pd.DataFrame:
     out = df.copy()
     out['observed_at_utc'] = out.index
@@ -70,6 +86,20 @@ def attach_h41_alignment(df: pd.DataFrame, instrument_type: str) -> pd.DataFrame
         out['effective_trade_at_utc'] = out['released_at_utc'].map(next_us_equity_open_after)
     elif instrument_type == 'crypto':
         out['effective_trade_at_utc'] = out['released_at_utc']
+    else:
+        out['effective_trade_at_utc'] = out['released_at_utc'].map(next_utc_midnight_after)
+    return out
+
+
+def attach_cftc_alignment(df: pd.DataFrame, instrument_type: str = 'fx') -> pd.DataFrame:
+    """Attach CFTC release and conservative tradable timestamps to Tuesday report rows."""
+    out = df.copy()
+    out['observed_at_utc'] = out.index
+    out['released_at_utc'] = out['observed_at_utc'].map(cftc_release_time)
+    if instrument_type == 'fx':
+        out['effective_trade_at_utc'] = out['released_at_utc'].map(next_fx_week_open_after)
+    elif instrument_type == 'equity':
+        out['effective_trade_at_utc'] = out['released_at_utc'].map(next_us_equity_open_after)
     else:
         out['effective_trade_at_utc'] = out['released_at_utc'].map(next_utc_midnight_after)
     return out

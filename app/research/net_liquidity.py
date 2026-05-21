@@ -218,5 +218,15 @@ def run_net_liquidity(settings: Settings, *, start_date: str, end_date: str | No
     write_json(run_dir / 'metrics.json', metrics)
     write_markdown_report(run_dir, metrics, warnings)
     pack = zip_dir(run_dir, settings.data_dir / 'packs' / f'{rid}.zip')
-    write_json(settings.data_dir / 'runs' / 'latest.json', {'run_id': rid, 'pack': str(pack), 'created_at_utc': metrics['created_at_utc'], 'metrics': metrics})
-    return {'run_id': rid, 'run_dir': str(run_dir), 'pack': str(pack), 'metrics': metrics, 'warnings': warnings}
+    summary = {
+        'run_id': rid,
+        'status': 'completed',
+        'hypothesis': metrics['hypothesis'],
+        'created_at_utc': metrics['created_at_utc'],
+        'run_dir': str(run_dir),
+        'pack': str(pack),
+        'metrics': metrics,
+        'warnings': warnings,
+    }
+    write_json(settings.data_dir / 'runs' / 'latest.json', summary)
+    return summary

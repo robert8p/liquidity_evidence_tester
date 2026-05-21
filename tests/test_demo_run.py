@@ -9,12 +9,13 @@ def test_demo_run_builds_pack(tmp_path: Path):
     result = run_net_liquidity(
         settings,
         start_date='2018-01-01',
-        end_date=None,
+        end_date='2021-01-01',
         target_symbol='QQQ',
         include_btc=True,
         include_equity=True,
         demo_mode=True,
         horizons_weeks=[1, 2, 4],
+        screen_features=False,
     )
     assert Path(result['pack']).exists()
     assert 'BTCUSD' in result['metrics']['targets']
