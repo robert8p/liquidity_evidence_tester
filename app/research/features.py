@@ -57,6 +57,67 @@ def price_to_weekly(price_df: pd.DataFrame) -> pd.Series:
     return price_df['close'].resample('W-FRI').last().dropna()
 
 
+
+def price_to_daily(price_df: pd.DataFrame) -> pd.Series:
+    """Return one clean daily close series for event-aligned tests.
+
+    Unlike price_to_weekly(), this preserves the first available business-day
+    price after a tradable timestamp. This is important for CFTC FX tests: the
+    public report is released Friday 15:30 ET, but the conservative first
+    evidence anchor should be the next available USD/JPY daily print after the
+    Monday FX tradable timestamp, not the following Friday weekly close.
+    """
+    if 'close' not in price_df.columns:
+        raise ValueError('price_df must contain a close column')
+    s = price_df['close'].copy()
+    if not isinstance(s.index, pd.DatetimeIndex):
+        raise ValueError('price_df index must be a DatetimeIndex')
+    if s.index.tz is None:
+        s.index = s.index.tz_localize('UTC')
+    else:
+        s.index = s.index.tz_convert('UTC')
+    return s.resample('B').last().dropna()
+
+
+def forward_log_returns_by_business_days(price: pd.Series, horizons_weeks: list[int]) -> pd.DataFrame:
+    """Forward log returns using approximately 5 business days per week."""
+    out = pd.DataFrame(index=price.index)
+    out['target_anchor_utc'] = price.index
+    for h in horizons_weeks:
+        periods = int(h) * 5
+        out[f'fwd_logret_{h}w'] = np.log(price.shift(-periods) / price)
+    return out
+
+
+def attach_daily_forward_returns_to_features(
+    features: pd.DataFrame,
+    daily_price: pd.Series,
+    horizons_weeks: list[int],
+    *,
+    max_lookahead_days: int = 7,
+) -> pd.DataFrame:
+    """Attach forward returns from the first available daily target after signal time.
+
+    This is stricter than weekly anchoring for FX/economic-release tests because it
+    avoids silently skipping several tradable days. The tolerance prevents early
+    feature rows from being matched to a much later first available price history.
+    """
+    returns = forward_log_returns_by_business_days(daily_price, horizons_weeks)
+    left = features.copy().sort_index()
+    right = returns.copy().sort_index()
+    tolerance = pd.Timedelta(days=max_lookahead_days) if max_lookahead_days is not None else None
+    aligned = pd.merge_asof(
+        left,
+        right,
+        left_index=True,
+        right_index=True,
+        direction='forward',
+        tolerance=tolerance,
+    )
+    if 'target_anchor_utc' in aligned.columns:
+        aligned['target_anchor_utc'] = pd.to_datetime(aligned['target_anchor_utc'], utc=True)
+    return aligned
+
 def forward_log_returns(price: pd.Series, horizons: list[int]) -> pd.DataFrame:
     out = pd.DataFrame(index=price.index)
     out['target_anchor_utc'] = price.index

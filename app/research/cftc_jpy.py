@@ -10,7 +10,7 @@ from app.adapters.cftc import fetch_tff_years, extract_jpy_tff_features
 from app.adapters.fred import fetch_fred_csv
 from app.config import Settings
 from app.release_calendar import attach_cftc_alignment
-from app.research.features import rolling_zscore, price_to_weekly, attach_forward_returns_to_features
+from app.research.features import rolling_zscore, price_to_weekly, price_to_daily, attach_forward_returns_to_features, attach_daily_forward_returns_to_features
 from app.research.stats import cross_corr_table, quintile_spread, arx_regression, expanding_directional_oos, summary_from_oos, validation_label, screen_feature_grid
 from app.research.reporting import write_csv
 from app.utils import run_id, utc_now_iso, write_json, zip_dir
@@ -98,8 +98,14 @@ def _synthetic_jpy_and_usdjpy(start: str = '2012-01-01', end: str | None = None)
 
 
 def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, horizons: list[int], run_dir: Path, *, screen_features: bool = True) -> dict:
-    weekly_price = price_to_weekly(price_df)
-    analysis = attach_forward_returns_to_features(features_aligned, weekly_price, horizons, max_lookahead_days=14)
+    # v0.3.1: use daily USD/JPY anchoring for CFTC FX tests.
+    # v0.3.0 used weekly Friday closes, which was conservative but skipped several
+    # tradable days after the Friday 15:30 ET CFTC release. Daily anchoring tests
+    # the return from the first available USD/JPY daily print after the conservative
+    # Monday FX tradable timestamp.
+    daily_price = price_to_daily(price_df)
+    analysis = attach_daily_forward_returns_to_features(features_aligned, daily_price, horizons, max_lookahead_days=7)
+    analysis['target_anchor_mode'] = 'daily_first_available_after_effective_trade_5bd_per_week'
     target_cols = [f'fwd_logret_{h}w' for h in horizons]
     matched_target_rows = int(analysis['target_anchor_utc'].notna().sum()) if 'target_anchor_utc' in analysis.columns else int(analysis[target_cols].notna().any(axis=1).sum())
     analysis_window_rows = int(len(features_aligned))
@@ -145,6 +151,7 @@ def _target_analysis(features_aligned: pd.DataFrame, price_df: pd.DataFrame, hor
         'matched_target_rows': matched_target_rows,
         'target_coverage_ratio': target_coverage_ratio,
         'first_matched_target_anchor_utc': first_matched_target_anchor,
+        'target_anchor_mode': 'daily_first_available_after_effective_trade_5bd_per_week',
         'primary_feature': primary_feature,
         'best_quintile_target': best_q.get('target'),
         'best_quintile_spread': best_q.get('spread'),
@@ -171,7 +178,7 @@ def _write_jpy_report(run_dir: Path, metrics: dict, warnings: list[str]) -> Path
         '',
         '## Hypothesis',
         '',
-        'CFTC Traders in Financial Futures leveraged-fund Japanese-yen positioning is tested as a leading variable for USD/JPY returns. The report date is treated as the Tuesday as-of date, public release as Friday 15:30 ET, and the effective tradable timestamp as the next conservative FX session.',
+        'CFTC Traders in Financial Futures leveraged-fund Japanese-yen positioning is tested as a leading variable for USD/JPY returns. The report date is treated as the Tuesday as-of date, public release as Friday 15:30 ET, and the effective tradable timestamp as the next conservative FX session. v0.3.1 anchors USD/JPY returns to the first available daily price after that effective timestamp rather than the next Friday weekly close.',
         '',
         '## Validation summary',
         '',
@@ -294,8 +301,9 @@ def run_cftc_jpy(settings: Settings, *, start_date: str, end_date: str | None, d
         m['analysis_window_rows'] = int(len(aligned_window))
         m['target_price_start_utc'] = str(usdjpy.index.min())
         m['target_price_end_utc'] = str(usdjpy.index.max())
+        warnings.append('USDJPY target anchoring uses first available daily price after the conservative effective FX timestamp; v0.3.0 weekly-Friday anchoring was intentionally replaced because it skipped several tradable days.')
         if m.get('matched_target_rows', 0) < len(aligned_window):
-            warnings.append(f"USDJPY target coverage warning: only {m.get('matched_target_rows', 0)} of {len(aligned_window)} release-aligned rows matched target history within the weekly tolerance. Earlier rows were left as NaN instead of being backfilled.")
+            warnings.append(f"USDJPY target coverage warning: only {m.get('matched_target_rows', 0)} of {len(aligned_window)} release-aligned rows matched target history within the daily tolerance. Earlier rows were left as NaN instead of being backfilled.")
         metrics['targets']['USDJPY'] = m
 
     if not metrics['targets']:

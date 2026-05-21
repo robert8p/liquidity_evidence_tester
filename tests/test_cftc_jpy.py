@@ -61,3 +61,23 @@ def test_run_cftc_jpy_demo(tmp_path: Path):
     assert Path(result['pack']).exists()
     assert 'USDJPY' in result['metrics']['targets']
     assert (tmp_path / 'runs' / 'latest.json').exists()
+
+
+def test_cftc_jpy_daily_target_anchor_does_not_skip_to_friday(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path)
+    settings.ensure_dirs()
+    result = run_cftc_jpy(settings, start_date='2016-01-01', end_date='2024-01-01', demo_mode=True, horizons_weeks=[1, 2, 4], screen_features=True)
+    run_dir = Path(result['pack']).parent.parent / 'runs' / result['run_id']
+    rows = pd.read_csv(run_dir / 'USDJPY_analysis_rows.csv')
+    matched = rows.dropna(subset=['target_anchor_utc']).copy()
+    assert not matched.empty
+    assert set(pd.to_datetime(matched['target_anchor_utc']).dt.day_name().head(20)) <= {'Monday'}
+    assert (matched['target_anchor_mode'] == 'daily_first_available_after_effective_trade_5bd_per_week').all()
+
+
+def test_cftc_jpy_metrics_record_daily_anchor_mode(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path)
+    settings.ensure_dirs()
+    result = run_cftc_jpy(settings, start_date='2016-01-01', end_date='2024-01-01', demo_mode=True, horizons_weeks=[1, 2, 4], screen_features=True)
+    m = result['metrics']['targets']['USDJPY']
+    assert m['target_anchor_mode'] == 'daily_first_available_after_effective_trade_5bd_per_week'

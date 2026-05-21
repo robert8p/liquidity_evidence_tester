@@ -44,3 +44,7 @@ CFTC/FRED module does not require a paid credential.
 The app applies conservative validation labels. A candidate fails if it lacks statistical support, fails to beat always-long/always-short baselines, has materially one-sided predictions, or has poor target coverage.
 
 Positive historical results are only candidates for deeper validation, not permission to trade.
+
+## v0.3.1 note
+
+The CFTC JPY module now anchors USD/JPY forward returns to the first available daily price after the conservative effective FX timestamp. v0.3.0 used weekly Friday anchoring, which was safe from look-ahead bias but skipped several tradable days after the CFTC release. This version is the correct next evidence run for judging the JPY positioning thesis.
